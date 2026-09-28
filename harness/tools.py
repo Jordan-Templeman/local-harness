@@ -224,21 +224,53 @@ class Workspace:
         lines = [line[:240] for line in result.stdout.splitlines()]
         if glob and not shutil.which("rg"):
             lines = [line for line in lines if fnmatch.fnmatch(Path(line.split(":", 1)[0]).name, glob)]
-        if not lines:
+        named = self.paths_matching(pattern, targets)
+        if not lines and not named:
             if result.returncode > 1 and result.stderr.strip():
                 raise ToolError(result.stderr.strip()[:500])
             return "No matches."
-        more = f"\n... {len(lines) - MAX_MATCHES} more matches; narrow the pattern or path" if len(lines) > MAX_MATCHES else ""
-        return "\n".join(lines[:MAX_MATCHES]) + more
+        sections = []
+        if named:
+            sections.append("Files whose path matches:\n" + "\n".join(named))
+        if lines:
+            more = f"\n... {len(lines) - MAX_MATCHES} more matches; narrow the pattern or path" if len(lines) > MAX_MATCHES else ""
+            sections.append("Content matches:\n" + "\n".join(lines[:MAX_MATCHES]) + more)
+        return "\n\n".join(sections)
+
+    def paths_matching(self, pattern, targets, limit=10):
+        needle = pattern.lower().replace("\\", "")
+        prefixes = [t for t in targets if t != "."]
+        return [
+            f for f in self.all_files()
+            if needle in f.lower() and (not prefixes or any(f == t or f.startswith(t + "/") for t in prefixes))
+        ][:limit]
 
     def read(self, path):
         with open(path, encoding="utf-8", errors="replace", newline="") as f:
             return f.read()
 
+    def suggest(self, path, limit=3):
+        files = self.all_files()
+        name = Path(path).name
+        same_name = [f for f in files if Path(f).name == name]
+        if same_name:
+            return same_name[:limit]
+        by_name = difflib.get_close_matches(name, sorted({Path(f).name for f in files}), n=limit, cutoff=0.75)
+        return [f for f in files if Path(f).name in by_name][:limit]
+
+    def not_found(self, path, hint=""):
+        suggestions = self.suggest(path)
+        message = f"{path} does not exist"
+        if suggestions:
+            message += ". Did you mean: " + ", ".join(suggestions) + "?"
+        else:
+            message += ". Use list_files or search to find the right path."
+        return ToolError(message + hint)
+
     def read_file(self, path, offset=1, limit=250):
         target = self.resolve(path)
         if not target.is_file():
-            raise ToolError(f"{path} does not exist or is not a file")
+            raise self.not_found(path)
         text = self.read(target)
         if "\0" in text[:2000]:
             raise ToolError(f"{path} looks like a binary file")
@@ -279,7 +311,7 @@ class Workspace:
     def replace_in_file(self, path, old_text, new_text):
         target = self.resolve(path)
         if not target.is_file():
-            raise ToolError(f"{path} does not exist; use write_file to create it")
+            raise self.not_found(path, " To create a new file, use write_file.")
         if not old_text:
             raise ToolError("old_text is empty")
         before = self.read(target)
@@ -358,7 +390,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search",
-            "description": "Search file contents with a regular expression. Returns file:line:text matches.",
+            "description": "Search file contents with a regular expression, and file paths with the same text. Returns matching file paths plus file:line:text content matches. Use it to find a file by name too.",
             "parameters": {
                 "type": "object",
                 "properties": {

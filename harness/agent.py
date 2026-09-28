@@ -29,6 +29,46 @@ ANNOUNCES_ACTION = re.compile(
     re.IGNORECASE,
 )
 
+REVIEW_REQUEST = re.compile(r"\b(review|audit|critique|code quality|find (?:bugs|issues|problems))\b", re.IGNORECASE)
+
+REVIEW_GUIDE = """The user is asking for a code review. Do it properly:
+1. Find the file the user named (search matches file names) and read it once, in full. Only open another file when a specific finding depends on it.
+2. Check, in this order: bugs and wrong behaviour; unhandled edge cases (nil or empty values, retries, concurrency, partial failure); error handling; security (authorization, injection, secrets); database performance (N+1 queries, queries inside loops, missing indexes); risky logic with no tests.
+3. Report at most 8 findings, most severe first. For each one give path:line, quote the code, explain the concrete problem (what input or situation breaks, and what goes wrong), and suggest a fix. Missing comments, documentation or style preferences are not findings. Never repeat the same kind of finding for multiple lines.
+4. Do not praise the code, give it a grade, or list things that are fine. If you find no real problems after checking everything, say so in one sentence and list what you checked.
+5. Do not edit files unless the user asks you to."""
+
+READ_ONLY_TOOLS = {"list_files", "search", "read_file"}
+
+EDIT_TOOLS = {"replace_in_file", "write_file", "delegate_edit"}
+
+FAILURE_PREFIXES = ("Error:", "The user rejected", "The user declined")
+
+REPEATED_FAILURE = (
+    "You already made this exact call in this turn and it failed or was rejected. Do not repeat it. "
+    "Change your approach, or explain the problem to the user and stop."
+)
+
+REVIEW_NO_EDITS = (
+    "Edits are disabled during a review because the user asked for a review, not changes. "
+    "Finish the review; the user can ask for fixes afterwards."
+)
+
+TRIMMED = "[old tool output removed to save space; run the tool again if needed]"
+
+REPEATED_CALL = (
+    "You already made this exact call in this turn and its result is above. Do not repeat it. "
+    "Use what you have: continue with the next step, or answer the user."
+)
+
+LINE_REFERENCE = re.compile(r"[\w/.-]+\.\w+:\d+")
+
+REVIEW_REDO = (
+    "That review has no path:line references, so it cannot be checked. If you have not found the file the user "
+    "asked about, find it first (search matches file names too). Then read it in full and rewrite the review: "
+    "every finding needs path:line, the quoted code, the concrete problem and a fix. Drop generic advice."
+)
+
 STACK_MARKERS = {
     "Gemfile": "Ruby (Bundler)",
     "package.json": "JavaScript/Node",
@@ -94,7 +134,7 @@ class Agent:
                 break
             content = message.get("content") or ""
             if message["role"] == "tool" and len(content) > 200:
-                message["content"] = "[old tool output removed to save space; run the tool again if needed]"
+                message["content"] = TRIMMED
                 size -= len(content)
 
     def cancel(self):
@@ -103,8 +143,14 @@ class Agent:
     def ask(self, text):
         ui = self.workspace.ui
         self.stop_event.clear()
+        reviewing = bool(REVIEW_REQUEST.search(text))
+        if reviewing:
+            ui.info("Review mode: findings with line references, no grades.")
+            self.messages.append({"role": "system", "content": REVIEW_GUIDE})
         self.messages.append({"role": "user", "content": text})
         nudges = 0
+        review_redone = False
+        seen = {}
         for _ in range(self.max_steps):
             self.trim()
             try:
@@ -122,6 +168,11 @@ class Agent:
                     nudges += 1
                     self.messages.append({"role": "user", "content": "Go ahead and do that now using the tools."})
                     continue
+                if reviewing and not review_redone and not LINE_REFERENCE.search(response["content"]):
+                    review_redone = True
+                    ui.info("The review had no path:line references; asking for a more specific one.")
+                    self.messages.append({"role": "user", "content": REVIEW_REDO})
+                    continue
                 ui.stats(response["stats"])
                 return
             for call in response["tool_calls"]:
@@ -137,7 +188,19 @@ class Agent:
                     except json.JSONDecodeError:
                         args = {}
                 ui.tool(name, args)
-                result = self.workspace.call(name, args)
+                key = json.dumps([name, args], sort_keys=True)
+                earlier = seen.get(key)
+                if reviewing and name in EDIT_TOOLS:
+                    result = REVIEW_NO_EDITS
+                elif earlier is not None and earlier["content"] != TRIMMED:
+                    result = REPEATED_CALL if name in READ_ONLY_TOOLS else REPEATED_FAILURE
+                else:
+                    result = self.workspace.call(name, args)
                 ui.result(result)
-                self.messages.append({"role": "tool", "tool_name": name, "content": result})
+                tool_message = {"role": "tool", "tool_name": name, "content": result}
+                self.messages.append(tool_message)
+                if name in READ_ONLY_TOOLS or result.startswith(FAILURE_PREFIXES):
+                    seen.setdefault(key, tool_message)
+                else:
+                    seen.clear()
         ui.error(f"Stopped after {self.max_steps} steps. Say 'continue' to keep going.")
