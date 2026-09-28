@@ -4,8 +4,11 @@
   "description": "Chat with local Ollama models that explore and edit your project. Every change is reviewed as a diff.",
   "version": "0.1.0",
   "publisher": "jordan-templeman",
-  "private": true,
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jordan-Templeman/local-harness"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -162,7 +165,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "bundle-python": "node scripts/copy-harness.js",
-    "package": "npm run compile && npm run bundle-python && vsce package --skip-license --allow-missing-repository --out lh-local-assistant.vsix"
+    "package": "npm run compile && npm run bundle-python && vsce package --skip-license --out lh-local-assistant.vsix"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
