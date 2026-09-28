@@ -10,7 +10,11 @@ class LLMError(RuntimeError):
     pass
 
 
-def chat(model, messages, tools=None, think=None, num_ctx=16384, on_token=None):
+class Cancelled(Exception):
+    pass
+
+
+def chat(model, messages, tools=None, think=None, num_ctx=16384, on_token=None, should_stop=None):
     body = {
         "model": model,
         "messages": messages,
@@ -31,6 +35,8 @@ def chat(model, messages, tools=None, think=None, num_ctx=16384, on_token=None):
     try:
         with urllib.request.urlopen(request, timeout=900) as response:
             for raw in response:
+                if should_stop and should_stop():
+                    raise Cancelled()
                 if not raw.strip():
                     continue
                 chunk = json.loads(raw)

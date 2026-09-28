@@ -1,9 +1,9 @@
 import json
 import re
+import threading
 
 from . import llm
 from .tools import TOOLS
-from .ui import ui
 
 SYSTEM = """You are a coding assistant working in the user's project at {root}. You talk with the user conversationally and use tools to explore and change their code.
 
@@ -42,8 +42,10 @@ STACK_MARKERS = {
 
 
 def scope_text(workspace):
-    if not workspace.scopes:
+    if not workspace.restricted:
         return "You have access to the whole project."
+    if not workspace.scopes:
+        return "The user has not given you access to any files right now. Ask them to grant access to the folders you need."
     return ("You only have access to these folders; tools refuse anything outside them: "
             + ", ".join(workspace.scopes))
 
@@ -70,6 +72,7 @@ class Agent:
         self.think = think
         self.num_ctx = num_ctx
         self.max_steps = max_steps
+        self.stop_event = threading.Event()
         self.reset()
 
     def reset(self):
@@ -94,14 +97,20 @@ class Agent:
                 message["content"] = "[old tool output removed to save space; run the tool again if needed]"
                 size -= len(content)
 
+    def cancel(self):
+        self.stop_event.set()
+
     def ask(self, text):
+        ui = self.workspace.ui
+        self.stop_event.clear()
         self.messages.append({"role": "user", "content": text})
         nudges = 0
         for _ in range(self.max_steps):
             self.trim()
             try:
                 response = llm.chat(self.model, self.messages, tools=TOOLS, think=self.think,
-                                    num_ctx=self.num_ctx, on_token=ui.token)
+                                    num_ctx=self.num_ctx, on_token=ui.token,
+                                    should_stop=self.stop_event.is_set)
             finally:
                 ui.end_stream()
             message = {"role": "assistant", "content": response["content"]}
@@ -116,6 +125,9 @@ class Agent:
                 ui.stats(response["stats"])
                 return
             for call in response["tool_calls"]:
+                if self.stop_event.is_set():
+                    self.messages.append({"role": "tool", "tool_name": "", "content": "Cancelled by the user."})
+                    raise llm.Cancelled()
                 function = call.get("function") or {}
                 name = function.get("name", "")
                 args = function.get("arguments") or {}

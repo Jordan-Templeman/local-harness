@@ -7,7 +7,7 @@ except ImportError:
     pass
 
 from .agent import Agent
-from .llm import LLMError
+from .llm import Cancelled, LLMError
 from .tools import ToolError, Workspace
 from .ui import BOLD, DIM, GREEN, RESET, ui
 
@@ -33,6 +33,16 @@ def confirm(question):
     if answer.lower() in ("", "n", "no"):
         return False, ""
     return False, answer
+
+
+class TerminalReviewer:
+    def edit(self, path, before, after, diff):
+        ui.diff(diff)
+        return confirm(f"Apply this change to {path}?")
+
+    def command(self, command):
+        ui.command(command)
+        return confirm("Run this command?")
 
 
 def mark(workspace, rel):
@@ -70,7 +80,7 @@ def pick_scope(workspace, agent, base):
     if not answer:
         return
     if answer == "all":
-        workspace.scopes = []
+        workspace.clear_scope()
     else:
         for token in answer.split():
             rel = token
@@ -78,10 +88,7 @@ def pick_scope(workspace, agent, base):
                 name = dirs[int(token) - 1][0]
                 rel = f"{base}/{name}" if base else name
             try:
-                if workspace.rel(rel) in workspace.scopes:
-                    workspace.remove_scope(rel)
-                else:
-                    workspace.add_scope(rel)
+                workspace.toggle_scope(rel)
             except ToolError as e:
                 ui.error(str(e))
     show_scope(workspace)
@@ -89,8 +96,8 @@ def pick_scope(workspace, agent, base):
 
 
 def show_scope(workspace):
-    if workspace.scopes:
-        ui.info("Access limited to: " + ", ".join(workspace.scopes))
+    if workspace.restricted:
+        ui.info("Access limited to: " + workspace.scope_label())
     else:
         ui.info("Access: whole project")
 
@@ -116,7 +123,7 @@ def handle_command(line, agent, workspace):
         print_tree(workspace, base, depth)
     elif command == "/scope":
         if args and args[0] == "clear":
-            workspace.scopes = []
+            workspace.clear_scope()
             show_scope(workspace)
             agent.scope_changed()
         else:
@@ -143,7 +150,7 @@ def handle_command(line, agent, workspace):
 def run(agent, text):
     try:
         agent.ask(text)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, Cancelled):
         ui.end_stream()
         ui.error("Interrupted.")
     except LLMError as e:
@@ -160,11 +167,18 @@ def main():
     parser.add_argument("--auto-edits", action="store_true", help="apply file edits without asking")
     parser.add_argument("--scope", default="", help="comma-separated folders the model may access")
     parser.add_argument("-p", "--prompt", help="run a single request and exit")
+    parser.add_argument("--server", action="store_true", help="speak JSON lines on stdin/stdout for the editor extension")
     args = parser.parse_args()
+    scopes = [s for s in args.scope.split(",") if s]
+
+    if args.server:
+        from .server import serve
+        serve(args.root, args.model, args.coder, args.ctx, args.think, scopes)
+        return
 
     workspace = Workspace(
-        args.root, args.coder, confirm, num_ctx=args.ctx, auto_edits=args.auto_edits,
-        scopes=[s for s in args.scope.split(",") if s],
+        args.root, args.coder, TerminalReviewer(), ui, num_ctx=args.ctx, auto_edits=args.auto_edits,
+        scopes=scopes,
     )
     agent = Agent(workspace, args.model, think=args.think, num_ctx=args.ctx)
 

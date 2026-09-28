@@ -7,7 +7,6 @@ from collections import Counter
 from pathlib import Path
 
 from . import llm
-from .ui import ui
 
 MAX_OUTPUT = 6000
 MAX_LIST = 200
@@ -38,19 +37,20 @@ def extract_code(text):
 
 
 class Workspace:
-    def __init__(self, root, coder_model, confirm, num_ctx=16384, auto_edits=False, scopes=()):
+    def __init__(self, root, coder_model, reviewer, ui, num_ctx=16384, auto_edits=False, scopes=()):
         self.root = Path(root).resolve()
         if not self.root.is_dir():
             raise SystemExit(f"{root} is not a directory")
         self.coder_model = coder_model
-        self.confirm = confirm
+        self.reviewer = reviewer
+        self.ui = ui
         self.num_ctx = num_ctx
         self.auto_edits = auto_edits
         self.is_git = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
             cwd=self.root, capture_output=True, text=True,
         ).stdout.strip() == "true"
-        self.scopes = []
+        self.scopes = None
         for scope in scopes:
             self.add_scope(scope)
         self.handlers = {
@@ -82,34 +82,72 @@ class Workspace:
             raise ToolError(f"{path} is outside the project")
         return "" if resolved == self.root else resolved.relative_to(self.root).as_posix()
 
+    @property
+    def restricted(self):
+        return self.scopes is not None
+
+    def scope_label(self):
+        return ", ".join(self.scopes) if self.scopes else "nothing"
+
     def in_scope(self, rel):
-        if not self.scopes:
+        if not self.restricted:
             return True
         return any(rel == s or rel.startswith(s + "/") for s in self.scopes)
 
     def overlaps_scope(self, rel):
-        return rel == "" or self.in_scope(rel) or any(s.startswith(rel + "/") for s in self.scopes)
+        if not self.restricted or self.in_scope(rel):
+            return True
+        return any(rel == "" or s.startswith(rel + "/") for s in self.scopes)
 
     def resolve(self, path):
         rel = self.rel(path)
         if not self.in_scope(rel):
-            raise ToolError(f"{path} is outside the folders the user gave you access to: {', '.join(self.scopes)}")
+            raise ToolError(f"{path} is outside the folders the user gave you access to: {self.scope_label()}")
         return self.root / rel
+
+    def clear_scope(self):
+        self.scopes = None
 
     def add_scope(self, path):
         rel = self.rel(path)
         if not (self.root / rel).exists():
             raise ToolError(f"{path} does not exist")
         if rel == "":
-            self.scopes = []
+            self.clear_scope()
             return
-        if self.scopes and self.in_scope(rel):
+        if self.restricted and self.in_scope(rel):
             return
-        self.scopes = sorted([s for s in self.scopes if not s.startswith(rel + "/")] + [rel])
+        kept = [s for s in (self.scopes or []) if not s.startswith(rel + "/")]
+        self.scopes = sorted(kept + [rel])
 
     def remove_scope(self, path):
         rel = self.rel(path)
-        self.scopes = [s for s in self.scopes if s != rel]
+        if self.restricted:
+            self.scopes = [s for s in self.scopes if s != rel]
+
+    def children(self, base):
+        prefix = f"{base}/" if base else ""
+        names = set()
+        for f in self.all_files(scoped=False):
+            if f.startswith(prefix):
+                names.add(prefix + f[len(prefix):].split("/", 1)[0])
+        return sorted(names)
+
+    def toggle_scope(self, path):
+        rel = self.rel(path)
+        if self.restricted and rel in self.scopes:
+            self.remove_scope(rel)
+        elif not self.restricted or not self.in_scope(rel):
+            self.add_scope(rel)
+        else:
+            ancestor = next(s for s in self.scopes if rel.startswith(s + "/"))
+            self.scopes.remove(ancestor)
+            current = ancestor
+            while current != rel:
+                following = f"{current}/{rel[len(current) + 1:].split('/', 1)[0]}"
+                self.scopes += [c for c in self.children(current) if c != following]
+                current = following
+            self.scopes.sort()
 
     def all_files(self, scoped=True):
         if self.is_git:
@@ -143,7 +181,7 @@ class Workspace:
     def list_files(self, path=".", pattern=None):
         base = self.rel(path)
         if not self.overlaps_scope(base):
-            raise ToolError(f"{path} is outside the folders the user gave you access to: {', '.join(self.scopes)}")
+            raise ToolError(f"{path} is outside the folders the user gave you access to: {self.scope_label()}")
         prefix = f"{base}/" if base else ""
         files = [f for f in self.all_files() if f == base or f.startswith(prefix)]
         if pattern:
@@ -165,11 +203,13 @@ class Workspace:
     def search(self, pattern, path=".", glob=None):
         base = self.rel(path)
         if not self.overlaps_scope(base):
-            raise ToolError(f"{path} is outside the folders the user gave you access to: {', '.join(self.scopes)}")
+            raise ToolError(f"{path} is outside the folders the user gave you access to: {self.scope_label()}")
         if self.in_scope(base):
             targets = [base or "."]
         else:
             targets = [s for s in self.scopes if base == "" or s.startswith(base + "/")]
+            if not targets:
+                raise ToolError(f"{path} is outside the folders the user gave you access to: {self.scope_label()}")
         if shutil.which("rg"):
             cmd = ["rg", "-n", "-S", "--max-columns", "200", "--max-count", "20"]
             if glob:
@@ -223,9 +263,10 @@ class Workspace:
             after.replace("\r\n", "\n").splitlines(True),
             f"a/{rel}", f"b/{rel}",
         ))
-        ui.diff("".join(diff_lines))
-        if not self.auto_edits:
-            approved, feedback = self.confirm(f"Apply this change to {rel}?")
+        if self.auto_edits:
+            self.ui.diff("".join(diff_lines))
+        else:
+            approved, feedback = self.reviewer.edit(rel, before, after, "".join(diff_lines))
             if not approved:
                 return f"The user rejected the change to {rel}." + (f" Their feedback: {feedback}" if feedback else "")
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -269,9 +310,9 @@ class Workspace:
             {"role": "user", "content": f"File: {rel}\n```\n{normalized}\n```\n\nInstructions:\n{instructions}"},
         ]
         try:
-            response = llm.chat(self.coder_model, messages, num_ctx=self.num_ctx, on_token=ui.coder_token)
+            response = llm.chat(self.coder_model, messages, num_ctx=self.num_ctx, on_token=self.ui.coder_token)
         finally:
-            ui.coder_done()
+            self.ui.coder_done()
         after = extract_code(response["content"])
         if after is None:
             raise ToolError("the coder model did not return a code block; try again with clearer instructions or use replace_in_file")
@@ -282,8 +323,7 @@ class Workspace:
         return self.apply(target, before, after)
 
     def run_command(self, command):
-        ui.command(command)
-        approved, feedback = self.confirm("Run this command?")
+        approved, feedback = self.reviewer.command(command)
         if not approved:
             return "The user declined to run the command." + (f" Their feedback: {feedback}" if feedback else "")
         try:
