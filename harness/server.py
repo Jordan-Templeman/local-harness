@@ -151,10 +151,11 @@ def serve(root, model, coder, num_ctx, think, scopes):
     def busy():
         return worker is not None and worker.is_alive()
 
-    def state(type_="state"):
+    def state(type_="state", is_busy=None):
         channel.send(
             type_, root=str(workspace.root), model=agent.model, coder=workspace.coder_model,
-            think=agent.think, auto_edits=workspace.auto_edits, scopes=workspace.scopes, busy=busy(),
+            think=agent.think, auto_edits=workspace.auto_edits, scopes=workspace.scopes,
+            busy=busy() if is_busy is None else is_busy,
         )
 
     def run_turn(text):
@@ -169,6 +170,7 @@ def serve(root, model, coder, num_ctx, think, scopes):
         finally:
             ui.end_stream()
             channel.send("turn_done")
+            state(is_busy=False)
 
     state("ready")
     for line in sys.stdin:
@@ -183,6 +185,7 @@ def serve(root, model, coder, num_ctx, think, scopes):
                     raise ToolError("Still working on the previous request. Stop it first.")
                 worker = threading.Thread(target=run_turn, args=(message["text"],), daemon=True)
                 worker.start()
+                state()
             elif kind == "cancel":
                 agent.cancel()
                 reviewer.reject_all()
@@ -197,6 +200,16 @@ def serve(root, model, coder, num_ctx, think, scopes):
                 state()
             elif kind == "clear_scope":
                 workspace.clear_scope()
+                agent.scope_changed()
+                channel.send("response", id=request_id)
+                state()
+            elif kind == "set_scope":
+                if message.get("scopes") is None:
+                    workspace.clear_scope()
+                else:
+                    workspace.scopes = []
+                    for path in message["scopes"]:
+                        workspace.add_scope(path)
                 agent.scope_changed()
                 channel.send("response", id=request_id)
                 state()

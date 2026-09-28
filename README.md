@@ -36,6 +36,30 @@ lh -p "question"                     # one request, then exit
 `list_files`, `search`, `read_file`, `replace_in_file`, `write_file`, `delegate_edit`, `run_command`.
 Paths are confined to the project root and to the folders in scope.
 
+## Editor extension (Devin / VS Code)
+
+`extension/` is a thin TypeScript client. It starts `python3 -m harness --server` and exchanges JSON lines with it, so the terminal and the editor share one core. On Windows it runs the harness inside WSL by default (`lh.useWsl`).
+
+- **Chat** panel in the lh sidebar: streaming replies, collapsible tool calls, Accept / Reject / feedback cards for every edit and command, and a Stop button.
+- **Access** panel: project folders with checkboxes. No boxes checked means the whole project; the toolbar can grant everything or remove all access.
+- Proposed edits open in the diff editor.
+- Status bar shows the models; click to switch.
+
+Build and install:
+
+```bash
+cd extension && npm install && npm run package
+devin-desktop --install-extension lh-local-assistant.vsix --force
+```
+
+`npm run package` copies `harness/` into the extension, so rebuild after changing the Python.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -t .
+```
+
 ## Settings
 
 Environment variables: `LH_MODEL`, `LH_CODER`, `LH_CTX` (context window, default 16384), `OLLAMA_API_BASE`.

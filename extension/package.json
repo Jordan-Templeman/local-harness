@@ -1,0 +1,173 @@
+{
+  "name": "lh-local-assistant",
+  "displayName": "lh: Local Coding Assistant",
+  "description": "Chat with local Ollama models that explore and edit your project. Every change is reviewed as a diff.",
+  "version": "0.1.0",
+  "publisher": "jordan-templeman",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lh",
+          "title": "lh",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "lh": [
+        {
+          "type": "webview",
+          "id": "lh.chat",
+          "name": "Chat"
+        },
+        {
+          "id": "lh.access",
+          "name": "Access"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "lh.newChat",
+        "title": "New Chat",
+        "category": "lh",
+        "icon": "$(add)"
+      },
+      {
+        "command": "lh.toggleThink",
+        "title": "Toggle Thinking Mode",
+        "category": "lh",
+        "icon": "$(lightbulb)"
+      },
+      {
+        "command": "lh.pickModels",
+        "title": "Choose Models",
+        "category": "lh",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "lh.wholeProject",
+        "title": "Give Access to the Whole Project",
+        "category": "lh",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "lh.noAccess",
+        "title": "Remove All Access",
+        "category": "lh",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "lh.refreshAccess",
+        "title": "Refresh",
+        "category": "lh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "lh.restart",
+        "title": "Restart Harness",
+        "category": "lh"
+      },
+      {
+        "command": "lh.showLog",
+        "title": "Show Log",
+        "category": "lh"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "lh.newChat",
+          "when": "view == lh.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "lh.toggleThink",
+          "when": "view == lh.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "lh.pickModels",
+          "when": "view == lh.chat",
+          "group": "navigation@3"
+        },
+        {
+          "command": "lh.wholeProject",
+          "when": "view == lh.access",
+          "group": "navigation@1"
+        },
+        {
+          "command": "lh.noAccess",
+          "when": "view == lh.access",
+          "group": "navigation@2"
+        },
+        {
+          "command": "lh.refreshAccess",
+          "when": "view == lh.access",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "lh",
+      "properties": {
+        "lh.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python 3.10+ used to run the harness."
+        },
+        "lh.useWsl": {
+          "type": "boolean",
+          "default": true,
+          "description": "On Windows, run the harness inside WSL (uses WSL's Python, git and tools). Ignored on other platforms and in WSL remote windows."
+        },
+        "lh.assistantModel": {
+          "type": "string",
+          "default": "qwen3:8b",
+          "description": "Ollama model you chat with; it explores the project and decides what to change."
+        },
+        "lh.coderModel": {
+          "type": "string",
+          "default": "qwen2.5-coder:14b",
+          "description": "Ollama model that writes larger single-file changes delegated by the assistant."
+        },
+        "lh.contextSize": {
+          "type": "number",
+          "default": 16384,
+          "description": "Context window in tokens. Lower is faster on small GPUs; higher fits bigger tasks."
+        },
+        "lh.ollamaUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434",
+          "description": "Where Ollama is listening."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "bundle-python": "node scripts/copy-harness.js",
+    "package": "npm run compile && npm run bundle-python && vsce package --skip-license --allow-missing-repository --out lh-local-assistant.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "~1.90.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.5.0"
+  }
+}
