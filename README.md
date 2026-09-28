@@ -49,8 +49,11 @@ Build and install:
 
 ```bash
 cd extension && npm install && npm run package
-devin-desktop --install-extension lh-local-assistant.vsix --force
+devin-desktop --user-data-dir "$APPDATA/Windsurf" --extensions-dir ~/.windsurf/extensions \
+  --install-extension lh-local-assistant.vsix --force
 ```
+
+Devin still runs from its Windsurf data folders; without those two flags the CLI installs into `~/.devin/extensions`, which the app never loads.
 
 `npm run package` copies `harness/` into the extension, so rebuild after changing the Python.
 
