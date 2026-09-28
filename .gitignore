@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+.aider*
+node_modules/
+out/
+*.vsix
